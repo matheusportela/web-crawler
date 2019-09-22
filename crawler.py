@@ -1,3 +1,4 @@
+import heapq
 import logging
 import queue
 import threading
@@ -14,12 +15,17 @@ from seeders import DuckDuckGoSeeder
 
 logging.basicConfig(format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 def get_domain(url):
     tld = tldextract.extract(url)
     return f'{tld.domain}.{tld.suffix}'
+
+
+def get_domain_and_subdomain(url):
+    tld = tldextract.extract(url)
+    return f'{tld.subdomain}.{tld.domain}.{tld.suffix}'
 
 
 class Crawler:
@@ -249,31 +255,252 @@ class TooManyDomainAccessesValidator(URLValidator):
         self.domain_accesses[domain] = accesses
 
 
+class URLPriorityQueue:
+    def __init__(self):
+        self.priority_queue = PriorityQueue()
+
+        self.queue_lock = threading.Lock()
+
+        self.url_counter = 0
+        self.url_id_lock = threading.Lock()
+
+        self.novelty_scorer = NoveltyScorer()
+        self.importance_scorer = ImportanceScorer()
+
+        self.current_urls = set()
+
+    def empty(self):
+        return self.priority_queue.empty()
+
+    def get(self):
+        with self.queue_lock:
+            result_url = None
+
+            while result_url is None:
+                priority, url = self.priority_queue.pop()
+                updated_priority = self.calculate_url_priority(url)
+
+                logger.debug(f'URLPriorityQueue - recalculated priority {-priority} -> {-updated_priority} for URL {url}')
+
+                if priority == updated_priority:
+                    result_url = url
+                else:
+                    self.priority_queue.put(updated_priority, url)
+
+            logger.debug(f'URLPriorityQueue - {-priority, result_url}')
+
+            # Update novelty score whenever URL is returned to be visited
+            self.novelty_scorer.update(result_url)
+
+            # Bookkeeping
+            self.current_urls.remove(result_url)
+
+        return result_url
+
+    def put(self, url):
+        with self.queue_lock:
+            if not self.is_url_enqueued(url):
+                self.enqueue(url)
+            else:
+                # Update importance score whenever a link to the URL is enqueued to be visited
+                self.importance_scorer.update(url)
+                priority = self.calculate_url_priority(url)
+                self.priority_queue.update(priority, url)
+
+    def is_url_enqueued(self, url):
+        return url in self.current_urls
+
+    def enqueue(self, url):
+        priority = self.calculate_url_priority(url)
+        url_id = self.calculate_url_id()
+        self.priority_queue.put(priority, url)
+        self.current_urls.add(url)
+
+    def calculate_url_priority(self, url):
+        novelty_score = self.novelty_scorer.score(url)
+        importance_score = self.importance_scorer.score(url)
+        url_score = novelty_score + importance_score
+        # Negative to transform min-heap (queue.PriorityQueue) into max-heap
+        return -url_score
+
+    def calculate_url_id(self):
+        with self.url_id_lock:
+            url_id = self.url_counter
+            self.url_counter += 1
+
+        return url_id
+
+
+class PriorityQueue:
+    # Reference: https://docs.python.org/3.7/library/heapq.html#priority-queue-implementation-notes
+    def __init__(self):
+        self.queue = []
+        self.entries = {}
+        self.entry_id_counter = 0
+        self.lock = threading.Lock()
+
+    def put(self, priority, value):
+        with self.lock:
+            entry_id = self.entry_id_counter
+            self.entry_id_counter += 1
+
+            entry = [priority, entry_id, value, False]
+            self.entries[value] = entry
+            heapq.heappush(self.queue, entry)
+
+    def update(self, priority, value):
+        self.remove(value)
+        self.put(priority, value)
+
+    def remove(self, value):
+        with self.lock:
+            entry = self.entries.pop(value)
+            entry[-1] = True
+
+    def pop(self):
+        with self.lock:
+            while self.queue:
+                entry = heapq.heappop(self.queue)
+                if not entry[-1]:
+                    del self.entries[entry[2]]
+                    return entry[0], entry[2]
+            raise KeyError('priority queue is empty')
+
+    def empty(self):
+        return self.queue == []
+
+
+class Scorer:
+    def score(self, url):
+        raise NotImplementedError
+
+    def update(self, url):
+        raise NotImplementedError
+
+
+class NoveltyScorer(Scorer):
+    def __init__(self):
+        self.domain_and_subdomain_visits = {}
+        self.lock = threading.Lock()
+        self.initial_score = 10
+        self.min_score = 0
+
+    def score(self, url):
+        domain_and_subdomain = get_domain_and_subdomain(url)
+        return self.domain_and_subdomain_visits.get(domain_and_subdomain, self.initial_score)
+
+    def update(self, url):
+        domain_and_subdomain = get_domain_and_subdomain(url)
+
+        logger.debug(f'NoveltyScorer - updating {url}')
+
+        with self.lock:
+            score = self.domain_and_subdomain_visits.get(domain_and_subdomain, self.initial_score)
+            score -= 1
+            self.domain_and_subdomain_visits[domain_and_subdomain] = max(self.min_score, score)
+
+        logger.debug(f'NoveltyScorer - updating {url} score to {score}')
+
+
+class ImportanceScorer(Scorer):
+    def __init__(self):
+        self.url_references = {}
+        self.lock = threading.Lock()
+        self.initial_score = 0
+        self.max_score = 10
+
+    def score(self, url):
+        return self.url_references.get(url, self.initial_score)
+
+    def update(self, url):
+        logger.debug(f'ImportanceScorer - updating {url}')
+
+        with self.lock:
+            score = self.url_references.get(url, 0)
+            score += 1
+            self.url_references[url] = min(self.max_score, score)
+
+        logger.debug(f'ImportanceScorer - updating {url} score to {score}')
+
+
 def main():
-    query = 'dogs'
-    logger.info(f'Crawling "{query}"')
+    queue = URLPriorityQueue()
+    queue.put('www.1.com')
+    queue.put('www.2.com')
+    queue.put('www.1.com')
+    queue.put('www.1.com')
+    queue.put('www.3.com')
+    queue.put('www.4.com')
+    queue.put('www.4.com')
+    queue.put('www.4.com')
+    queue.put('www.4.com')
+    queue.put('www.4.com')
+    queue.put('www.4.com')
+    queue.put('www.4.com')
+    queue.put('www.4.com')
+    queue.get()
+    queue.get()
+    queue.get()
+    queue.get()
+    queue.put('www.1.com')
+    queue.put('www.3.com')
+    queue.put('www.2.com')
+    queue.put('www.4.com')
+    queue.get()
+    queue.get()
+    queue.get()
+    queue.get()
+    queue.put('www.1.com')
+    queue.put('www.3.com')
+    queue.put('www.2.com')
+    queue.put('www.4.com')
 
-    seeder = DuckDuckGoSeeder()
-    urls = seeder.get_urls(query)
-    logger.debug(urls)
+    queue.put('www.4.com')
+    queue.get()
+    queue.put('www.4.com')
+    queue.get()
+    queue.put('www.4.com')
+    queue.get()
+    queue.put('www.4.com')
+    queue.get()
+    while not queue.empty():
+        queue.get()
 
-    # urls = [
-    #     'https://en.wikipedia.org/wiki/Dog',
-    #     'https://en.wikipedia.org/wiki/Cat',
-    #     'https://en.wikipedia.org/wiki/Parrot',
-    #     'https://en.wikipedia.org/wiki/Turtle',
-    #     'https://en.wikipedia.org/wiki/Armadillo',
-    #     'https://en.wikipedia.org/wiki/Snake',
-    #     'https://www.dictionary.com/browse/dogs',
-    #     'https://www.adoptapet.com/',
-    #     'https://en.wikipedia.org/wiki/Pet',
-    #     'https://en.wikipedia.org/wiki/Brazil',
-    #     'https://en.wikipedia.org/wiki/Tenis',
-    #     'http://www.rescueme.org/',
-    #     'https://www.petfinder.com/dogs/',
-    # ]
-    crawler = Crawler()
-    crawler.crawl(urls)
+
+    # q = PriorityQueue()
+    # q.put(-1, 'www.1.com')
+    # q.put(-2, 'www.2.com')
+    # q.put(-1, 'www.3.com')
+    # q.put(-1, 'www.4.com')
+    # q.update(-4, 'www.1.com')
+    # q.update(-3, 'www.3.com')
+    # while not q.empty():
+    #     print(q.pop())
+
+    # query = 'dogs'
+    # logger.info(f'Crawling "{query}"')
+
+    # seeder = DuckDuckGoSeeder()
+    # urls = seeder.get_urls(query)
+    # logger.debug(urls)
+
+    # # urls = [
+    # #     'https://en.wikipedia.org/wiki/Dog',
+    # #     'https://en.wikipedia.org/wiki/Cat',
+    # #     'https://en.wikipedia.org/wiki/Parrot',
+    # #     'https://en.wikipedia.org/wiki/Turtle',
+    # #     'https://en.wikipedia.org/wiki/Armadillo',
+    # #     'https://en.wikipedia.org/wiki/Snake',
+    # #     'https://www.dictionary.com/browse/dogs',
+    # #     'https://www.adoptapet.com/',
+    # #     'https://en.wikipedia.org/wiki/Pet',
+    # #     'https://en.wikipedia.org/wiki/Brazil',
+    # #     'https://en.wikipedia.org/wiki/Tenis',
+    # #     'http://www.rescueme.org/',
+    # #     'https://www.petfinder.com/dogs/',
+    # # ]
+    # crawler = Crawler()
+    # crawler.crawl(urls)
 
 
 if __name__ == '__main__':
