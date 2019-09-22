@@ -15,7 +15,7 @@ from seeders import DuckDuckGoSeeder
 
 logging.basicConfig(format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 
 def get_domain(url):
@@ -33,7 +33,8 @@ class Crawler:
         self.name = 'Crawler'
         self.valid_url_queue = queue.Queue()
         self.candidate_url_queue = queue.Queue()
-        self.num_workers = 3
+        self.url_priority_queue = URLPriorityQueue()
+        self.num_workers = 20
         self.domain_locks = {}
 
     def crawl(self, urls):
@@ -42,34 +43,40 @@ class Crawler:
         for url in urls:
             self.enqueue_url(url)
 
-        self.spawn_url_validator()
+        validator = self.spawn_url_validator()
+
+        time.sleep(1)
+
         self.spawn_workers()
 
         time.sleep(1)
 
-        self.valid_url_queue.join()
+        # self.valid_url_queue.join()
+        validator.join()
 
     def enqueue_url(self, url):
         self.candidate_url_queue.put(url)
 
     def spawn_url_validator(self):
         logger.debug(f'{self.name} - Spawning URL validator')
-        validator = URLValidatorThread(self.valid_url_queue, self.candidate_url_queue, self.domain_locks)
+        validator = URLValidatorThread(self.valid_url_queue, self.candidate_url_queue, self.url_priority_queue, self.domain_locks)
         validator.start()
+        return validator
 
     def spawn_workers(self):
         for worker_id in range(self.num_workers):
             logger.debug(f'{self.name} - Spawning crawler worker')
-            worker = WorkerThread(worker_id, self.valid_url_queue, self.candidate_url_queue, self.domain_locks)
+            worker = WorkerThread(worker_id, self.valid_url_queue, self.candidate_url_queue, self.url_priority_queue, self.domain_locks)
             worker.start()
 
 
 class WorkerThread(threading.Thread):
-    def __init__(self, worker_id, valid_url_queue, candidate_url_queue, domain_locks):
+    def __init__(self, worker_id, valid_url_queue, candidate_url_queue, url_priority_queue, domain_locks):
         super().__init__(daemon=True)
         self.name = f'Worker {worker_id}'
         self.valid_url_queue = valid_url_queue
         self.candidate_url_queue = candidate_url_queue
+        self.url_priority_queue = url_priority_queue
         self.domain_locks = domain_locks
         self.user_agent = 'mvp'
 
@@ -81,7 +88,9 @@ class WorkerThread(threading.Thread):
 
     def enqueued_valid_urls(self):
         while True:
-            url = self.valid_url_queue.get()
+            # url = self.valid_url_queue.get()
+
+            url = self.url_priority_queue.get()
 
             # Avoid simultaneous accesses to same domain
             lock = self.get_domain_lock(url)
@@ -89,7 +98,7 @@ class WorkerThread(threading.Thread):
                 logger.debug(f'{self.name} - Domain locks: {self.domain_locks}')
                 yield url
 
-            self.valid_url_queue.task_done()
+            # self.valid_url_queue.task_done()
 
     def get_domain_lock(self, url):
         domain = get_domain(url)
@@ -97,7 +106,7 @@ class WorkerThread(threading.Thread):
 
     def crawl_url(self, url):
         logger.debug(f'{self.name} - Started crawling URL {url}')
-        logger.info(url)
+        # logger.info(url)
 
         if not self.is_robots_allowed(url):
             return
@@ -168,12 +177,13 @@ class WorkerThread(threading.Thread):
 
 
 class URLValidatorThread(threading.Thread):
-    def __init__(self, valid_url_queue, candidate_url_queue, domain_locks):
+    def __init__(self, valid_url_queue, candidate_url_queue, url_priority_queue, domain_locks):
         super().__init__(daemon=True)
         self.name = 'URLValidator'
 
         self.valid_url_queue = valid_url_queue
         self.candidate_url_queue = candidate_url_queue
+        self.url_priority_queue = url_priority_queue
 
         self.domain_locks = domain_locks
 
@@ -200,7 +210,8 @@ class URLValidatorThread(threading.Thread):
 
             # Add to queue only *after* updating validators to avoid processing
             # URLs that are still being validated
-            self.valid_url_queue.put(candidate_url)
+            # self.valid_url_queue.put(candidate_url)
+            self.url_priority_queue.put(candidate_url)
 
     def is_valid_url(self, candidate_url):
         for validator in self.validators:
@@ -273,6 +284,14 @@ class URLPriorityQueue:
         return self.priority_queue.empty()
 
     def get(self):
+        while True:
+            try:
+                return self.pop()
+            except KeyError:
+                logger.debug('URLPriorityQueue - Queue is empty... Waiting')
+                time.sleep(0.1)
+
+    def pop(self):
         with self.queue_lock:
             result_url = None
 
@@ -287,7 +306,7 @@ class URLPriorityQueue:
                 else:
                     self.priority_queue.put(updated_priority, url)
 
-            logger.debug(f'URLPriorityQueue - {-priority, result_url}')
+            logger.info(f'Priority: {-priority} URL: {result_url}')
 
             # Update novelty score whenever URL is returned to be visited
             self.novelty_scorer.update(result_url)
@@ -382,7 +401,7 @@ class NoveltyScorer(Scorer):
     def __init__(self):
         self.domain_and_subdomain_visits = {}
         self.lock = threading.Lock()
-        self.initial_score = 10
+        self.initial_score = 3
         self.min_score = 0
 
     def score(self, url):
@@ -424,83 +443,15 @@ class ImportanceScorer(Scorer):
 
 
 def main():
-    queue = URLPriorityQueue()
-    queue.put('www.1.com')
-    queue.put('www.2.com')
-    queue.put('www.1.com')
-    queue.put('www.1.com')
-    queue.put('www.3.com')
-    queue.put('www.4.com')
-    queue.put('www.4.com')
-    queue.put('www.4.com')
-    queue.put('www.4.com')
-    queue.put('www.4.com')
-    queue.put('www.4.com')
-    queue.put('www.4.com')
-    queue.put('www.4.com')
-    queue.get()
-    queue.get()
-    queue.get()
-    queue.get()
-    queue.put('www.1.com')
-    queue.put('www.3.com')
-    queue.put('www.2.com')
-    queue.put('www.4.com')
-    queue.get()
-    queue.get()
-    queue.get()
-    queue.get()
-    queue.put('www.1.com')
-    queue.put('www.3.com')
-    queue.put('www.2.com')
-    queue.put('www.4.com')
+    query = 'dogs'
+    logger.info(f'Crawling "{query}"')
 
-    queue.put('www.4.com')
-    queue.get()
-    queue.put('www.4.com')
-    queue.get()
-    queue.put('www.4.com')
-    queue.get()
-    queue.put('www.4.com')
-    queue.get()
-    while not queue.empty():
-        queue.get()
+    seeder = DuckDuckGoSeeder()
+    urls = seeder.get_urls(query)
+    logger.debug(urls)
 
-
-    # q = PriorityQueue()
-    # q.put(-1, 'www.1.com')
-    # q.put(-2, 'www.2.com')
-    # q.put(-1, 'www.3.com')
-    # q.put(-1, 'www.4.com')
-    # q.update(-4, 'www.1.com')
-    # q.update(-3, 'www.3.com')
-    # while not q.empty():
-    #     print(q.pop())
-
-    # query = 'dogs'
-    # logger.info(f'Crawling "{query}"')
-
-    # seeder = DuckDuckGoSeeder()
-    # urls = seeder.get_urls(query)
-    # logger.debug(urls)
-
-    # # urls = [
-    # #     'https://en.wikipedia.org/wiki/Dog',
-    # #     'https://en.wikipedia.org/wiki/Cat',
-    # #     'https://en.wikipedia.org/wiki/Parrot',
-    # #     'https://en.wikipedia.org/wiki/Turtle',
-    # #     'https://en.wikipedia.org/wiki/Armadillo',
-    # #     'https://en.wikipedia.org/wiki/Snake',
-    # #     'https://www.dictionary.com/browse/dogs',
-    # #     'https://www.adoptapet.com/',
-    # #     'https://en.wikipedia.org/wiki/Pet',
-    # #     'https://en.wikipedia.org/wiki/Brazil',
-    # #     'https://en.wikipedia.org/wiki/Tenis',
-    # #     'http://www.rescueme.org/',
-    # #     'https://www.petfinder.com/dogs/',
-    # # ]
-    # crawler = Crawler()
-    # crawler.crawl(urls)
+    crawler = Crawler()
+    crawler.crawl(urls)
 
 
 if __name__ == '__main__':
