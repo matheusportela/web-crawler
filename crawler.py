@@ -184,10 +184,10 @@ class WorkerThread(threading.Thread):
     def output_results(self, priority, url, page_size):
         output = []
         output.append(f'{datetime.now().isoformat()}')
-        output.append(f'Priority: {-priority}')
-        output.append(f'Size: {page_size}')
-        output.append(f'URL: {url}')
-        print(' - '.join(output))
+        output.append(f'{-priority}')
+        output.append(f'{page_size}')
+        output.append(f'{url}')
+        print(','.join(output))
 
 
 class URLValidatorThread(threading.Thread):
