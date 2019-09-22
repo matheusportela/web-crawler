@@ -83,20 +83,21 @@ class WorkerThread(threading.Thread):
         logger.debug(f'{self.name} - Spawned')
 
     def run(self):
-        for url in self.enqueued_valid_urls():
-            self.crawl_url(url)
+        for priority, url in self.enqueued_valid_urls():
+            page_size = self.crawl_url(url)
+            self.output_results(priority, url, page_size)
 
     def enqueued_valid_urls(self):
         while True:
             # url = self.valid_url_queue.get()
 
-            url = self.url_priority_queue.get()
+            priority, url = self.url_priority_queue.get()
 
             # Avoid simultaneous accesses to same domain
             lock = self.get_domain_lock(url)
             with lock:
                 logger.debug(f'{self.name} - Domain locks: {self.domain_locks}')
-                yield url
+                yield priority, url
 
             # self.valid_url_queue.task_done()
 
@@ -109,11 +110,11 @@ class WorkerThread(threading.Thread):
         # logger.info(url)
 
         if not self.is_robots_allowed(url):
-            return
+            return 'Robots'
 
         page = self.fetch_page(url)
         if page is None:
-            return
+            return 'Error'
 
         candidate_urls = self.extract_urls(page)
         candidate_urls = self.normalize_urls(url, candidate_urls)
@@ -121,6 +122,7 @@ class WorkerThread(threading.Thread):
         self.enqueue_candidate_urls(candidate_urls)
 
         logger.debug(f'{self.name} - Finished crawling URL {url}')
+        return len(page)
 
     def is_robots_allowed(self, url):
         try:
@@ -128,6 +130,9 @@ class WorkerThread(threading.Thread):
             return robots.allowed(url, self.user_agent)
         except reppy.exceptions.ReppyException as e:
             logger.debug(f'{self.name} - Error when reading robots for URL {url} - {e}')
+            return
+        except Exception as e:
+            logger.error(e)
             return
 
     def fetch_page(self, url):
@@ -140,7 +145,10 @@ class WorkerThread(threading.Thread):
             return response.content
         except requests.exceptions.RequestException as e:
             logger.debug(f'{self.name} - Error when crawling URL {url} - {e}')
-            return None
+            return
+        except Exception as e:
+            logger.error(e)
+            return
 
     def extract_urls(self, page):
         soup = BeautifulSoup(page, 'html.parser')
@@ -174,6 +182,20 @@ class WorkerThread(threading.Thread):
     def enqueue_candidate_urls(self, candidate_urls):
         for url in candidate_urls:
             self.candidate_url_queue.put(url)
+
+    def output_results(self, priority, url, page_size):
+        size = page_size if type(page_size) is int else 0
+        error = page_size if type(page_size) is str else None
+
+        output = []
+        output.append(f'Priority: {-priority}')
+        output.append(f'Size: {size}')
+        output.append(f'URL: {url}')
+
+        if error:
+            output.append(f'Error: {error}')
+
+        logger.info(' - '.join(output))
 
 
 class URLValidatorThread(threading.Thread):
@@ -306,7 +328,7 @@ class URLPriorityQueue:
                 else:
                     self.priority_queue.put(updated_priority, url)
 
-            logger.info(f'Priority: {-priority} URL: {result_url}')
+            logger.debug(f'URLPriorityQueue - Priority: {-priority} URL: {result_url}')
 
             # Update novelty score whenever URL is returned to be visited
             self.novelty_scorer.update(result_url)
@@ -314,7 +336,7 @@ class URLPriorityQueue:
             # Bookkeeping
             self.current_urls.remove(result_url)
 
-        return result_url
+        return priority, result_url
 
     def put(self, url):
         with self.queue_lock:
@@ -448,6 +470,7 @@ def main():
 
     seeder = DuckDuckGoSeeder()
     urls = seeder.get_urls(query)
+    # urls = ['https://en.wikipedia.org/wiki/Dog']
     logger.debug(urls)
 
     crawler = Crawler()
