@@ -7,6 +7,7 @@ import time
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
+import click
 import reppy
 import requests
 import tldextract
@@ -476,8 +477,12 @@ class ImportanceScorer(Scorer):
         logger.debug(f'ImportanceScorer - updating {url} domain score to {domain_and_subdomain_score}')
 
 
-def main():
-    query = 'dogs'
+@click.command(
+    name='crawl',
+    short_help='crawl websites using text query',
+    context_settings={'help_option_names': ['-h', '--help']})
+@click.argument('query')
+def crawl(query):
     logger.info(f'Crawling "{query}"')
 
     seeder = DuckDuckGoSeeder()
@@ -489,4 +494,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    crawl()
