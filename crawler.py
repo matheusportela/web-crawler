@@ -165,7 +165,7 @@ class WorkerThread(threading.Thread):
         query = parsed_url.query or parsed_base_url.query
         query = f'?{query}' if query else ''
 
-        normalized_url = f'{scheme}://{domain}{path}{query}'
+        normalized_url = f'{scheme}://{domain}{path}{query}'.lower()
         return normalized_url
 
     def deduplicate_urls(self, urls):
