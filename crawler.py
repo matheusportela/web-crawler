@@ -1,5 +1,6 @@
 import heapq
 import logging
+import math
 import queue
 import threading
 import time
@@ -342,11 +343,11 @@ class URLPriorityQueue:
         with self.queue_lock:
             if not self.is_url_enqueued(url):
                 self.enqueue(url)
-            else:
-                # Update importance score whenever a link to the URL is enqueued to be visited
-                self.importance_scorer.update(url)
-                priority = self.calculate_url_priority(url)
-                self.priority_queue.update(priority, url)
+
+            # Update importance score whenever a link to the URL is enqueued to be visited
+            self.importance_scorer.update(url)
+            priority = self.calculate_url_priority(url)
+            self.priority_queue.update(priority, url)
 
     def is_url_enqueued(self, url):
         return url in self.current_urls
@@ -423,7 +424,7 @@ class NoveltyScorer(Scorer):
     def __init__(self):
         self.domain_and_subdomain_visits = {}
         self.lock = threading.Lock()
-        self.initial_score = 3
+        self.initial_score = 10
         self.min_score = 0
 
     def score(self, url):
@@ -431,9 +432,9 @@ class NoveltyScorer(Scorer):
         return self.domain_and_subdomain_visits.get(domain_and_subdomain, self.initial_score)
 
     def update(self, url):
-        domain_and_subdomain = get_domain_and_subdomain(url)
-
         logger.debug(f'NoveltyScorer - updating {url}')
+
+        domain_and_subdomain = get_domain_and_subdomain(url)
 
         with self.lock:
             score = self.domain_and_subdomain_visits.get(domain_and_subdomain, self.initial_score)
@@ -445,23 +446,34 @@ class NoveltyScorer(Scorer):
 
 class ImportanceScorer(Scorer):
     def __init__(self):
-        self.url_references = {}
+        self.page_references = {}
+        self.domain_and_subdomain_references = {}
         self.lock = threading.Lock()
         self.initial_score = 0
-        self.max_score = 10
+        self.max_score = math.inf
 
     def score(self, url):
-        return self.url_references.get(url, self.initial_score)
+        domain_and_subdomain = get_domain_and_subdomain(url)
+        page_score = self.page_references.get(url, self.initial_score)
+        domain_and_subdomain_score = self.domain_and_subdomain_references.get(domain_and_subdomain, self.initial_score)
+        score = page_score + domain_and_subdomain_score
+        return score
 
     def update(self, url):
         logger.debug(f'ImportanceScorer - updating {url}')
 
-        with self.lock:
-            score = self.url_references.get(url, 0)
-            score += 1
-            self.url_references[url] = min(self.max_score, score)
+        domain_and_subdomain = get_domain_and_subdomain(url)
 
-        logger.debug(f'ImportanceScorer - updating {url} score to {score}')
+        with self.lock:
+            page_score = self.page_references.get(url, self.initial_score)
+            domain_and_subdomain_score = self.domain_and_subdomain_references.get(domain_and_subdomain, self.initial_score)
+            page_score += 1
+            domain_and_subdomain_score += 1
+            self.page_references[url] = min(self.max_score, page_score)
+            self.domain_and_subdomain_references[domain_and_subdomain] = min(self.max_score, domain_and_subdomain_score)
+
+        logger.debug(f'ImportanceScorer - updating {url} page score to {page_score}')
+        logger.debug(f'ImportanceScorer - updating {url} domain score to {domain_and_subdomain_score}')
 
 
 def main():
@@ -470,7 +482,6 @@ def main():
 
     seeder = DuckDuckGoSeeder()
     urls = seeder.get_urls(query)
-    # urls = ['https://en.wikipedia.org/wiki/Dog']
     logger.debug(urls)
 
     crawler = Crawler()
