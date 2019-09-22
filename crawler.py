@@ -59,14 +59,12 @@ class Crawler:
         self.candidate_url_queue.put(url)
 
     def spawn_url_validator(self):
-        logger.info(f'{self.name} - Spawning URL validator')
         validator = URLValidatorThread(self.valid_url_queue, self.candidate_url_queue, self.url_priority_queue, self.domain_locks)
         validator.start()
         return validator
 
     def spawn_workers(self):
         for worker_id in range(self.num_workers):
-            logger.info(f'{self.name} - Spawning crawler worker')
             worker = WorkerThread(worker_id, self.valid_url_queue, self.candidate_url_queue, self.url_priority_queue, self.domain_locks)
             worker.start()
 
@@ -106,11 +104,11 @@ class WorkerThread(threading.Thread):
         logger.debug(f'{self.name} - Started crawling URL {url}')
 
         if not self.is_robots_allowed(url):
-            return 'Robots'
+            return 0
 
         page = self.fetch_page(url)
         if page is None:
-            return 'Error'
+            return 0
 
         candidate_urls = self.extract_urls(page)
         candidate_urls = self.normalize_urls(url, candidate_urls)
@@ -118,16 +116,18 @@ class WorkerThread(threading.Thread):
         self.enqueue_candidate_urls(candidate_urls)
 
         logger.debug(f'{self.name} - Finished crawling URL {url}')
+
         return len(page)
 
     def is_robots_allowed(self, url):
         try:
             robots = reppy.Robots.fetch(reppy.Robots.robots_url(url))
             return robots.allowed(url, self.user_agent)
-        except reppy.exceptions.ReppyException as e:
-            logger.warning(f'{self.name} - Error when reading robots for URL {url} - {e}')
+        except (reppy.exceptions.ReppyException, ValueError) as e:
+            logger.debug(f'{self.name} - Error when reading robots for URL {url} - {e}')
             return
         except Exception as e:
+            logger.error(f'{self.name} - Error when reading robots for URL {url} - {e}')
             logger.exception(e)
             return
 
@@ -143,6 +143,7 @@ class WorkerThread(threading.Thread):
             logger.warning(f'{self.name} - Error when crawling URL {url} - {e}')
             return
         except Exception as e:
+            logger.error(f'{self.name} - Error when crawling URL {url} - {e}')
             logger.exception(e)
             return
 
@@ -180,17 +181,10 @@ class WorkerThread(threading.Thread):
             self.candidate_url_queue.put(url)
 
     def output_results(self, priority, url, page_size):
-        size = page_size if type(page_size) is int else 0
-        error = page_size if type(page_size) is str else None
-
         output = []
         output.append(f'Priority: {-priority}')
-        output.append(f'Size: {size}')
+        output.append(f'Size: {page_size}')
         output.append(f'URL: {url}')
-
-        if error:
-            output.append(f'Error: {error}')
-
         print(' - '.join(output))
 
 
