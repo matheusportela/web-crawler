@@ -12,6 +12,12 @@ Crawling query `new york university`:
 $ python crawler.py "new york university"
 ```
 
+Saving output to file:
+
+```bash
+$ python crawler.py "new york university" > output.txt
+```
+
 Getting help:
 
 ```bash

@@ -40,7 +40,7 @@ class Crawler:
         self.domain_locks = {}
 
     def crawl(self, urls):
-        logger.debug(f'{self.name} - Starting crawler')
+        logger.info(f'{self.name} - Starting crawler')
 
         for url in urls:
             self.enqueue_url(url)
@@ -53,21 +53,20 @@ class Crawler:
 
         time.sleep(1)
 
-        # self.valid_url_queue.join()
         validator.join()
 
     def enqueue_url(self, url):
         self.candidate_url_queue.put(url)
 
     def spawn_url_validator(self):
-        logger.debug(f'{self.name} - Spawning URL validator')
+        logger.info(f'{self.name} - Spawning URL validator')
         validator = URLValidatorThread(self.valid_url_queue, self.candidate_url_queue, self.url_priority_queue, self.domain_locks)
         validator.start()
         return validator
 
     def spawn_workers(self):
         for worker_id in range(self.num_workers):
-            logger.debug(f'{self.name} - Spawning crawler worker')
+            logger.info(f'{self.name} - Spawning crawler worker')
             worker = WorkerThread(worker_id, self.valid_url_queue, self.candidate_url_queue, self.url_priority_queue, self.domain_locks)
             worker.start()
 
@@ -82,7 +81,7 @@ class WorkerThread(threading.Thread):
         self.domain_locks = domain_locks
         self.user_agent = 'mvp'
 
-        logger.debug(f'{self.name} - Spawned')
+        logger.info(f'{self.name} - Spawned')
 
     def run(self):
         for priority, url in self.enqueued_valid_urls():
@@ -91,8 +90,6 @@ class WorkerThread(threading.Thread):
 
     def enqueued_valid_urls(self):
         while True:
-            # url = self.valid_url_queue.get()
-
             priority, url = self.url_priority_queue.get()
 
             # Avoid simultaneous accesses to same domain
@@ -101,15 +98,12 @@ class WorkerThread(threading.Thread):
                 logger.debug(f'{self.name} - Domain locks: {self.domain_locks}')
                 yield priority, url
 
-            # self.valid_url_queue.task_done()
-
     def get_domain_lock(self, url):
         domain = get_domain(url)
         return self.domain_locks[domain]
 
     def crawl_url(self, url):
         logger.debug(f'{self.name} - Started crawling URL {url}')
-        # logger.info(url)
 
         if not self.is_robots_allowed(url):
             return 'Robots'
@@ -131,10 +125,10 @@ class WorkerThread(threading.Thread):
             robots = reppy.Robots.fetch(reppy.Robots.robots_url(url))
             return robots.allowed(url, self.user_agent)
         except reppy.exceptions.ReppyException as e:
-            logger.debug(f'{self.name} - Error when reading robots for URL {url} - {e}')
+            logger.warning(f'{self.name} - Error when reading robots for URL {url} - {e}')
             return
         except Exception as e:
-            logger.error(e)
+            logger.exception(e)
             return
 
     def fetch_page(self, url):
@@ -146,10 +140,10 @@ class WorkerThread(threading.Thread):
             response = requests.get(url, headers=headers)
             return response.content
         except requests.exceptions.RequestException as e:
-            logger.debug(f'{self.name} - Error when crawling URL {url} - {e}')
+            logger.warning(f'{self.name} - Error when crawling URL {url} - {e}')
             return
         except Exception as e:
-            logger.error(e)
+            logger.exception(e)
             return
 
     def extract_urls(self, page):
@@ -197,7 +191,7 @@ class WorkerThread(threading.Thread):
         if error:
             output.append(f'Error: {error}')
 
-        logger.info(' - '.join(output))
+        print(' - '.join(output))
 
 
 class URLValidatorThread(threading.Thread):
@@ -216,7 +210,7 @@ class URLValidatorThread(threading.Thread):
             URLAlreadyVisitedValidator(),
         ]
 
-        logger.debug(f'{self.name} - Spawned')
+        logger.info(f'{self.name} - Spawned')
 
     def run(self):
         while True:
@@ -251,7 +245,7 @@ class URLValidatorThread(threading.Thread):
         if domain not in self.domain_locks:
             self.domain_locks[domain] = threading.Lock()
 
-        logger.debug(f'{self.name} - Domain locks: {self.domain_locks}')
+        # logger.debug(f'{self.name} - Domain locks: {self.domain_locks}')
 
 
 class URLValidator:
@@ -483,7 +477,7 @@ class ImportanceScorer(Scorer):
     context_settings={'help_option_names': ['-h', '--help']})
 @click.argument('query')
 def crawl(query):
-    logger.info(f'Crawling "{query}"')
+    print(f'Crawling "{query}"')
 
     seeder = DuckDuckGoSeeder()
     urls = seeder.get_urls(query)
