@@ -1,3 +1,4 @@
+from datetime import datetime
 import heapq
 import logging
 import math
@@ -182,6 +183,7 @@ class WorkerThread(threading.Thread):
 
     def output_results(self, priority, url, page_size):
         output = []
+        output.append(f'{datetime.now().isoformat()}')
         output.append(f'Priority: {-priority}')
         output.append(f'Size: {page_size}')
         output.append(f'URL: {url}')
