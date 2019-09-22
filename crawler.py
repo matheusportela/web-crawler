@@ -84,7 +84,9 @@ class WorkerThread(threading.Thread):
     def run(self):
         for priority, url in self.enqueued_valid_urls():
             page_size = self.crawl_url(url)
-            self.output_results(priority, url, page_size)
+
+            if page_size:
+                self.output_results(priority, url, page_size)
 
     def enqueued_valid_urls(self):
         while True:
@@ -127,8 +129,7 @@ class WorkerThread(threading.Thread):
             logger.debug(f'{self.name} - Error when reading robots for URL {url} - {e}')
             return
         except Exception as e:
-            logger.error(f'{self.name} - Error when reading robots for URL {url} - {e}')
-            logger.exception(e)
+            logger.exception(f'{self.name} - Error when reading robots for URL {url} - {e}')
             return
 
     def fetch_page(self, url):
@@ -143,8 +144,7 @@ class WorkerThread(threading.Thread):
             logger.warning(f'{self.name} - Error when crawling URL {url} - {e}')
             return
         except Exception as e:
-            logger.error(f'{self.name} - Error when crawling URL {url} - {e}')
-            logger.exception(e)
+            logger.exception(f'{self.name} - Error when crawling URL {url} - {e}')
             return
 
     def extract_urls(self, page):
