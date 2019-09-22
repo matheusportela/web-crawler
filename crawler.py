@@ -187,7 +187,7 @@ class WorkerThread(threading.Thread):
         output.append(f'{-priority}')
         output.append(f'{page_size}')
         output.append(f'{url}')
-        print(','.join(output))
+        print('\t'.join(output))
 
 
 class URLValidatorThread(threading.Thread):
@@ -415,8 +415,9 @@ class NoveltyScorer(Scorer):
     def __init__(self):
         self.domain_and_subdomain_visits = {}
         self.lock = threading.Lock()
-        self.initial_score = 10
+        self.initial_score = 1
         self.min_score = 0
+        self.step = 0.1
 
     def score(self, url):
         domain_and_subdomain = get_domain_and_subdomain(url)
@@ -429,7 +430,7 @@ class NoveltyScorer(Scorer):
 
         with self.lock:
             score = self.domain_and_subdomain_visits.get(domain_and_subdomain, self.initial_score)
-            score -= 1
+            score -= self.step
             self.domain_and_subdomain_visits[domain_and_subdomain] = max(self.min_score, score)
 
         logger.debug(f'NoveltyScorer - updating {url} score to {score}')
@@ -442,6 +443,8 @@ class ImportanceScorer(Scorer):
         self.lock = threading.Lock()
         self.initial_score = 0
         self.max_score = math.inf
+        self.domain_step = 1
+        self.page_step = 1
 
     def score(self, url):
         domain_and_subdomain = get_domain_and_subdomain(url)
@@ -458,8 +461,8 @@ class ImportanceScorer(Scorer):
         with self.lock:
             page_score = self.page_references.get(url, self.initial_score)
             domain_and_subdomain_score = self.domain_and_subdomain_references.get(domain_and_subdomain, self.initial_score)
-            page_score += 1
-            domain_and_subdomain_score += 1
+            page_score += self.page_step
+            domain_and_subdomain_score += self.domain_step
             self.page_references[url] = min(self.max_score, page_score)
             self.domain_and_subdomain_references[domain_and_subdomain] = min(self.max_score, domain_and_subdomain_score)
 
