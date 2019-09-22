@@ -6,6 +6,14 @@ Didactic Web crawler for Web Search Engines (CS 6913) course at NYU
 
 ## Instructions
 
+Crawling query `new york university`:
+
 ```bash
-$ python crawler.py
+$ python crawler.py "new york university"
+```
+
+Getting help:
+
+```bash
+$ python crawler.py -h
 ```
