@@ -3,6 +3,14 @@ Didactic Web crawler for Web Search Engines (CS 6913) course at NYU
 
 ## Requirements
 - Python 3.7
+- pip
+- virtualenv (optional but recommended)
+
+## Install
+
+```bash
+$ pip install -r requirements.txt
+```
 
 ## Instructions
 
