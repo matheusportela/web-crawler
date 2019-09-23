@@ -37,7 +37,7 @@ class Crawler:
         self.valid_url_queue = queue.Queue()
         self.candidate_url_queue = queue.Queue()
         self.url_priority_queue = URLPriorityQueue()
-        self.num_workers = 20
+        self.num_workers = 80
         self.domain_locks = {}
 
     def crawl(self, urls):
@@ -139,7 +139,7 @@ class WorkerThread(threading.Thread):
         }
 
         try:
-            response = requests.get(url, headers=headers)
+            response = requests.get(url, headers=headers, timeout=5)
             return response.content
         except requests.exceptions.RequestException as e:
             logger.warning(f'{self.name} - Error when crawling URL {url} - {e}')
@@ -303,7 +303,7 @@ class URLPriorityQueue:
                 return self.pop()
             except KeyError:
                 logger.debug('URLPriorityQueue - Queue is empty... Waiting')
-                time.sleep(0.1)
+                time.sleep(0.01)
 
     def pop(self):
         with self.queue_lock:
