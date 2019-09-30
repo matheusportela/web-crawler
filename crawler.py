@@ -20,16 +20,21 @@ logger.setLevel(logging.INFO)
 
 
 def get_domain(url):
+    """Get domain from given URL."""
     tld = tldextract.extract(url)
     return f'{tld.domain}.{tld.suffix}'
 
 
 def get_domain_and_subdomain(url):
+    """Get domain and sub-domain from given URL."""
     tld = tldextract.extract(url)
     return f'{tld.subdomain}.{tld.domain}.{tld.suffix}'
 
 
 class Crawler:
+    """Crawler class, responsible for spawning URL validator and workers threads,
+    as well as creating FIFO queues, priority queues and domain locks storage.
+    """
     def __init__(self, bfs=False):
         self.name = 'Crawler'
         self.valid_url_queue = queue.Queue()
@@ -39,6 +44,7 @@ class Crawler:
         self.domain_locks = {}
 
     def crawl(self, urls):
+        """Start crawling given a list of URLs."""
         logger.info(f'{self.name} - Starting crawler')
 
         self.print_header()
@@ -57,23 +63,30 @@ class Crawler:
         validator.join()
 
     def enqueue_url(self, url):
+        """Push a URL to the candidate URL queue with depth 1."""
         self.candidate_url_queue.put((url, 1))
 
     def spawn_url_validator(self):
+        """Spawn URL validator thread."""
         validator = URLValidatorThread(self.valid_url_queue, self.candidate_url_queue, self.url_priority_queue, self.domain_locks)
         validator.start()
         return validator
 
     def spawn_workers(self):
+        """Spawn worker threads."""
         for worker_id in range(self.num_workers):
             worker = WorkerThread(worker_id, self.valid_url_queue, self.candidate_url_queue, self.url_priority_queue, self.domain_locks)
             worker.start()
 
     def print_header(self):
+        """Print header to output."""
         print('Timestamp\tPriority\tDepth\tSize\tURL')
 
 
 class WorkerThread(threading.Thread):
+    """Worker thread, responsible for acquiring domain lock, checking robots.txt,
+    fetching URL pages, parsing HTML, extracting URLs, increasing crawling depth
+    and pushing extracted URLs to candidate URL queue."""
     def __init__(self, worker_id, valid_url_queue, candidate_url_queue, url_priority_queue, domain_locks):
         super().__init__(daemon=True)
         self.name = f'Worker {worker_id}'
@@ -86,6 +99,7 @@ class WorkerThread(threading.Thread):
         logger.info(f'{self.name} - Spawned')
 
     def run(self):
+        """Crawl URL and output results."""
         for priority, url, depth in self.enqueued_valid_urls():
             page_size = self.crawl_url(url, depth)
 
@@ -93,6 +107,7 @@ class WorkerThread(threading.Thread):
                 self.output_results(priority, url, depth, page_size)
 
     def enqueued_valid_urls(self):
+        """Get next URL from valid URLs queue."""
         while True:
             priority, url, depth = self.url_priority_queue.get()
 
@@ -103,10 +118,12 @@ class WorkerThread(threading.Thread):
                 yield priority, url, depth
 
     def get_domain_lock(self, url):
+        """Get domain lock for the given URL."""
         domain = get_domain(url)
         return self.domain_locks[domain]
 
     def crawl_url(self, url, depth):
+        """Crawl URL."""
         logger.debug(f'{self.name} - Started crawling URL {url}')
 
         if not self.is_robots_allowed(url):
@@ -126,6 +143,7 @@ class WorkerThread(threading.Thread):
         return len(page)
 
     def is_robots_allowed(self, url):
+        """Check robots.txt."""
         try:
             robots = reppy.Robots.fetch(reppy.Robots.robots_url(url))
             return robots.allowed(url, self.user_agent)
@@ -137,6 +155,7 @@ class WorkerThread(threading.Thread):
             return
 
     def fetch_page(self, url):
+        """Fetch HTML page for the given URL."""
         headers = {
             'User-Agent': self.user_agent,
         }
@@ -152,6 +171,7 @@ class WorkerThread(threading.Thread):
             return
 
     def extract_urls(self, page):
+        """Extract URLs from HTML page."""
         soup = BeautifulSoup(page, 'html.parser')
         links = soup.find_all('a')
         urls = [link.get('href') for link in links]
@@ -161,9 +181,11 @@ class WorkerThread(threading.Thread):
         return urls
 
     def normalize_urls(self, base_url, candidate_urls):
+        """Normalize candidate URLs."""
         return [self.normalize_url(base_url, candidate_url) for candidate_url in candidate_urls]
 
     def normalize_url(self, base_url, candidate_url):
+        """Transform relative paths to absolute ones."""
         parsed_base_url = urlparse(base_url)
         parsed_url = urlparse(candidate_url)
 
@@ -174,17 +196,20 @@ class WorkerThread(threading.Thread):
         query = parsed_url.query or parsed_base_url.query
         query = f'?{query}' if query else ''
 
-        normalized_url = f'{scheme}://{domain}{path}{query}'.lower()
+        normalized_url = f'{scheme}://{domain}{path}{query}'
         return normalized_url
 
     def deduplicate_urls(self, urls):
+        """Remove duplicated URLs from list."""
         return list(set(urls))
 
     def enqueue_candidate_urls(self, candidate_urls, depth):
+        """Enqueue candidate URLs with increased crawling depth."""
         for url in candidate_urls:
             self.candidate_url_queue.put((url, depth + 1))
 
     def output_results(self, priority, url, depth, page_size):
+        """Print crawling results for the given URL."""
         output = []
         output.append(f'{datetime.now().isoformat()}')
         output.append(f'{-priority}')
@@ -195,6 +220,7 @@ class WorkerThread(threading.Thread):
 
 
 class URLValidatorThread(threading.Thread):
+    """Checks whether extracted URL should be crawled or not."""
     def __init__(self, valid_url_queue, candidate_url_queue, url_priority_queue, domain_locks):
         super().__init__(daemon=True)
         self.name = 'URLValidator'
@@ -213,11 +239,14 @@ class URLValidatorThread(threading.Thread):
         logger.info(f'{self.name} - Spawned')
 
     def run(self):
+        """Process URLs in candidate URL queue."""
         while True:
             candidate_url, depth = self.candidate_url_queue.get()
             self.process_candidate_url(candidate_url, depth)
 
     def process_candidate_url(self, candidate_url, depth):
+        """Checks whether URL is valid. If so, creates domain lock when necessary
+        and pushes URL to priority queue."""
         logger.debug(f'{self.name} - Validating URL {candidate_url}')
 
         if self.is_valid_url(candidate_url):
@@ -232,6 +261,7 @@ class URLValidatorThread(threading.Thread):
             self.url_priority_queue.put(candidate_url, depth)
 
     def is_valid_url(self, candidate_url):
+        """Checks whether URL is valid using validators."""
         for validator in self.validators:
             if not validator.is_valid(candidate_url):
                 logger.debug(f'{self.name} - Skipping URL {candidate_url} - {validator.__class__.__name__}')
@@ -241,14 +271,14 @@ class URLValidatorThread(threading.Thread):
         return True
 
     def ensure_domain_lock_exists(self, url):
+        """Create domain lock when necessary."""
         domain = get_domain(url)
         if domain not in self.domain_locks:
             self.domain_locks[domain] = threading.Lock()
 
-        # logger.debug(f'{self.name} - Domain locks: {self.domain_locks}')
-
 
 class URLValidator:
+    """Abstract class to URL validators used by validator thread."""
     def is_valid(self, candidate_url):
         raise NotImplementedError
 
@@ -257,27 +287,33 @@ class URLValidator:
 
 
 class URLAlreadyVisitedValidator(URLValidator):
+    """Validates whether given URL has already been visited."""
     def __init__(self):
         self.visited_urls = set()
 
     def is_valid(self, candidate_url):
+        """Validates whether given URL has already been visited."""
         return candidate_url not in self.visited_urls
 
     def update(self, url):
+        """Update list of visited URLs."""
         self.visited_urls.add(url)
 
 
 class TooManyDomainAccessesValidator(URLValidator):
+    """Validates whether domain has been visited too many times."""
     def __init__(self):
         self.domain_accesses = {}
         self.max_accesses = 50
 
     def is_valid(self, candidate_url):
+        """Validates whether domain has been visited too many times."""
         domain = get_domain(candidate_url)
         accesses = self.domain_accesses.get(domain, 0)
         return accesses < self.max_accesses
 
     def update(self, url):
+        """Update counting of domain visits."""
         domain = get_domain(url)
         accesses = self.domain_accesses.get(domain, 0)
         accesses += 1
@@ -285,6 +321,7 @@ class TooManyDomainAccessesValidator(URLValidator):
 
 
 class URLPriorityQueue:
+    """URL priority queue using novelty and importance scores."""
     def __init__(self, bfs=False):
         self.priority_queue = PriorityQueue()
 
@@ -303,9 +340,11 @@ class URLPriorityQueue:
         self.current_urls = set()
 
     def empty(self):
+        """Checks whether priority queue is empty."""
         return self.priority_queue.empty()
 
     def get(self):
+        """Gets highest priority URL, block when none is available."""
         while True:
             try:
                 return self.pop()
@@ -314,6 +353,7 @@ class URLPriorityQueue:
                 time.sleep(0.01)
 
     def pop(self):
+        """Gets highest priority URL thread-safely."""
         with self.queue_lock:
             result_url = None
             result_depth = None
@@ -341,6 +381,7 @@ class URLPriorityQueue:
         return priority, result_url, result_depth
 
     def put(self, url, depth):
+        """Put URL into queue thread-safely."""
         with self.queue_lock:
             if not self.is_url_enqueued(url):
                 self.enqueue(url, depth)
@@ -351,15 +392,18 @@ class URLPriorityQueue:
             self.priority_queue.update(priority, (url, depth))
 
     def is_url_enqueued(self, url):
+        """Checks whether URL is already in queue."""
         return url in self.current_urls
 
     def enqueue(self, url, depth):
+        """Calculate score and put URL into queue."""
         priority = self.calculate_url_priority(url)
         url_id = self.calculate_url_id()
         self.priority_queue.put(priority, (url, depth))
         self.current_urls.add(url)
 
     def calculate_url_priority(self, url):
+        """Calculate URL priority score."""
         novelty_score = self.novelty_scorer.score(url)
         importance_score = self.importance_scorer.score(url)
         url_score = novelty_score + importance_score
@@ -367,6 +411,7 @@ class URLPriorityQueue:
         return -url_score
 
     def calculate_url_id(self):
+        """Calculate URL ID, tie-breaking in priority queue."""
         with self.url_id_lock:
             url_id = self.url_counter
             self.url_counter += 1
@@ -375,6 +420,8 @@ class URLPriorityQueue:
 
 
 class PriorityQueue:
+    """Thread-safe priority queue."""
+
     # Reference: https://docs.python.org/3.7/library/heapq.html#priority-queue-implementation-notes
     def __init__(self):
         self.queue = []
@@ -383,6 +430,7 @@ class PriorityQueue:
         self.lock = threading.Lock()
 
     def put(self, priority, value):
+        """Put value into priority queue thread-safely."""
         with self.lock:
             entry_id = self.entry_id_counter
             self.entry_id_counter += 1
@@ -392,15 +440,18 @@ class PriorityQueue:
             heapq.heappush(self.queue, entry)
 
     def update(self, priority, value):
+        """Update value from priority queue thread-safely."""
         self.remove(value)
         self.put(priority, value)
 
     def remove(self, value):
+        """Remove value from priority queue thread-safely."""
         with self.lock:
             entry = self.entries.pop(value)
             entry[-1] = True
 
     def pop(self):
+        """Get value from priority queue thread-safely."""
         with self.lock:
             while self.queue:
                 entry = heapq.heappop(self.queue)
@@ -410,10 +461,12 @@ class PriorityQueue:
             raise KeyError('priority queue is empty')
 
     def empty(self):
+        """Check whether priority queue is empty."""
         return self.queue == []
 
 
 class Scorer:
+    """Abstract class to calculate URL score."""
     def score(self, url):
         raise NotImplementedError
 
@@ -422,6 +475,7 @@ class Scorer:
 
 
 class NoveltyScorer(Scorer):
+    """URL novelty score."""
     def __init__(self):
         self.domain_and_subdomain_visits = {}
         self.lock = threading.Lock()
@@ -430,10 +484,12 @@ class NoveltyScorer(Scorer):
         self.step = 0.1
 
     def score(self, url):
+        """Calculate novelty score based on the domain."""
         domain_and_subdomain = get_domain_and_subdomain(url)
         return self.domain_and_subdomain_visits.get(domain_and_subdomain, self.initial_score)
 
     def update(self, url):
+        """Update domain novelty score."""
         logger.debug(f'NoveltyScorer - updating {url}')
 
         domain_and_subdomain = get_domain_and_subdomain(url)
@@ -447,6 +503,7 @@ class NoveltyScorer(Scorer):
 
 
 class ImportanceScorer(Scorer):
+    """URL importance score."""
     def __init__(self):
         self.page_references = {}
         self.domain_and_subdomain_references = {}
@@ -457,6 +514,7 @@ class ImportanceScorer(Scorer):
         self.page_step = 1
 
     def score(self, url):
+        """Calculate URL importance score based on the domain and URL."""
         domain_and_subdomain = get_domain_and_subdomain(url)
         page_score = self.page_references.get(url, self.initial_score)
         domain_and_subdomain_score = self.domain_and_subdomain_references.get(domain_and_subdomain, self.initial_score)
@@ -464,6 +522,7 @@ class ImportanceScorer(Scorer):
         return score
 
     def update(self, url):
+        """Update URL importance score."""
         logger.debug(f'ImportanceScorer - updating {url}')
 
         domain_and_subdomain = get_domain_and_subdomain(url)
@@ -481,6 +540,7 @@ class ImportanceScorer(Scorer):
 
 
 class BFSScorer(Scorer):
+    """BFS score, constant for all URLs."""
     def score(self, url):
         return 1
 
@@ -489,11 +549,14 @@ class BFSScorer(Scorer):
 
 
 class Seeder:
+    """Abstract class for seeders."""
     def get_urls(self, query):
         raise NotImplementedError('Seeder must implement "get_urls" method')
 
 
 class DuckDuckGoSeeder(Seeder):
+    """Get seed URLs from DuckDuckGo's first page of results."""
+
     headers = {
         'Host': 'duckduckgo.com',
         'User-Agent': ('Mozilla/5.0 (Windows NT 10.0; rv:68.0) Gecko/20100101 '
@@ -510,12 +573,14 @@ class DuckDuckGoSeeder(Seeder):
     }
 
     def get_urls(self, query):
+        """Get seed URLs from DuckDuckGo's first page of results."""
         logger.debug('Getting URLs from DuckDuckGo')
         page = self.search(query)
         urls = self.extract_urls(page)
         return urls
 
     def search(self, query):
+        """Request results from DuckDuckGo."""
         response = requests.post(
             'https://duckduckgo.com/lite/',
             data={'q': query, 'kl': 'us-en'},
@@ -526,6 +591,7 @@ class DuckDuckGoSeeder(Seeder):
         return response.content
 
     def extract_urls(self, page):
+        """Parse and extract URLs from DuckDuckGo."""
         soup = BeautifulSoup(page, 'html.parser')
         links = soup.find_all('a', ['result-link'])
         urls = [link.get('href') for link in links]
@@ -538,7 +604,7 @@ class DuckDuckGoSeeder(Seeder):
     context_settings={'help_option_names': ['-h', '--help']})
 @click.option(
     '--bfs', '-b', is_flag=True, default=False,
-    help='runs BFS crawler')
+    help='Runs BFS crawler. Without this flag, the crawler runs in prioritized mode.')
 @click.argument('query')
 def crawl(query, bfs):
     print(f'Crawling "{query}"')
