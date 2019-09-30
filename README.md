@@ -14,10 +14,16 @@ $ pip install -r requirements.txt
 
 ## Instructions
 
-Crawling query `new york university`:
+Crawling query `new york university` with priority score:
 
 ```bash
 $ python crawler.py "new york university"
+```
+
+Crawling query `new york university` without priority score (BFS-style):
+
+```bash
+$ python crawler.py --bfs "new york university"
 ```
 
 Saving output to file:
