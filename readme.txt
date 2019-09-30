@@ -1,6 +1,7 @@
 FILES:
 - readme.txt: This file
 - explain.txt: Description of the crawler
+- requirements.txt: Python packages as output by pip
 - crawler.py: Source code and script for running the crawler
 - brooklyn_parks_bfs.txt: Crawling output for the query "brooklyn parks" using BFS crawling
 - brooklyn_parks_priority.txt: Crawling output for the query "brooklyn parks" using prioritized crawling
