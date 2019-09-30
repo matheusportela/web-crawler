@@ -1,0 +1,66 @@
+CRAWLER ARCHITECTURE
+
+When started, the crawler extracts seed URLs from DuckDuckGo's first page of results. Then it spawns 1 validator thread and 80 worker threads, each working as described below:
+
+    Validator thread:
+        - Gets URL from candidate URL queue
+        - Checks if URL has already been crawled
+        - Checks if domain had too many accesses (at most 50 accesses)
+        - Creates domain lock if necessary
+        - Puts valid URLs to priority queue
+
+    Worker thread:
+        - Gets URL and depth from priority queue
+        - Acquires lock for the URL domain
+        - Checks robots.txt and exit if not allowed to crawl the URL
+        - Fetches page
+        - Extracts URLs from page
+        - Normalizes URL from relative paths to absolute paths
+        - Increases URL depth
+        - Puts extracted URLs in candidate URL queue
+
+
+
+PRIORITY QUEUE
+
+The priority queue is a max heap implemented using Python's standard library package heapq. Each entry in the priority queue has the following attributes:
+
+    - priority: A integer number defining the priority. Since heapq implements a min heap by default, this number must be the negative of the URL priority in order to transform this min heap into a max heap.
+    - entry_id: A monotonically increasing value. When priority is tied between multiple entries, entry_id is used to select the oldest entry. When doing BFS crawling, this value guarantees the FIFO ordering.
+    - value: A 2-tuple containing the URL and their depth in the crawling.
+
+The priority queue uses locks to be thread-safe when inserting, extracting and updating values.
+
+
+
+PRIORITY SCORE
+
+The total priority score is simply the sum of the novelty and importance scores.
+
+Novelty starts at 10 and is decreased by 0.1 each time the domain has been crawled. The minimum value novelty can reach is 0.
+
+Importance starts at 0 and increases by 1 each time the specific URL has been parsed from crawled URLs and 0.01 each time the domain has been parsed out.
+
+    score = novelty + importance
+    novelty = max(0, 10 - 0.1*domain)
+    importance = 1*url + 0.01*domain
+
+
+
+BFS SCORE
+
+When running in BFS mode, both novelty and importance scores are 1. Hence, all URLs are crawled with priority 2. When multiple URLs have the same score, the priority queue selects URLs in FIFO order.
+
+    score = novelty + importance
+    novelty = 1
+    importance = 1
+
+
+
+MISSING FEATURES AND LIMITATIONS
+
+- MIME type checking: No explicit file type or MIME type checking was implemented. When parsing non-text data with the HTML parser, it raises and error, which is captured by the worker thread. MIME type validation should improve crawling performance, since it will reduce the overall payload size.
+
+- Overall crawling statistics: Only statistics for individual pages are outputted (timestamp, priority, depth, page size and URL).
+
+- Since domain locks are created by the URL validator thread, it means there is 1 lock for each domain in the priority queue. When this queue grows larger, the program might run out of memory.
