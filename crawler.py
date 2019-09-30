@@ -32,11 +32,11 @@ def get_domain_and_subdomain(url):
 
 
 class Crawler:
-    def __init__(self):
+    def __init__(self, bfs=False):
         self.name = 'Crawler'
         self.valid_url_queue = queue.Queue()
         self.candidate_url_queue = queue.Queue()
-        self.url_priority_queue = URLPriorityQueue()
+        self.url_priority_queue = URLPriorityQueue(bfs=bfs)
         self.num_workers = 80
         self.domain_locks = {}
 
@@ -272,7 +272,7 @@ class URLAlreadyVisitedValidator(URLValidator):
 class TooManyDomainAccessesValidator(URLValidator):
     def __init__(self):
         self.domain_accesses = {}
-        self.max_accesses = 3
+        self.max_accesses = 50
 
     def is_valid(self, candidate_url):
         domain = get_domain(candidate_url)
@@ -287,7 +287,7 @@ class TooManyDomainAccessesValidator(URLValidator):
 
 
 class URLPriorityQueue:
-    def __init__(self):
+    def __init__(self, bfs=False):
         self.priority_queue = PriorityQueue()
 
         self.queue_lock = threading.Lock()
@@ -295,8 +295,12 @@ class URLPriorityQueue:
         self.url_counter = 0
         self.url_id_lock = threading.Lock()
 
-        self.novelty_scorer = NoveltyScorer()
-        self.importance_scorer = ImportanceScorer()
+        if bfs:
+            self.novelty_scorer = BFSScorer()
+            self.importance_scorer = BFSScorer()
+        else:
+            self.novelty_scorer = NoveltyScorer()
+            self.importance_scorer = ImportanceScorer()
 
         self.current_urls = set()
 
@@ -423,7 +427,7 @@ class NoveltyScorer(Scorer):
     def __init__(self):
         self.domain_and_subdomain_visits = {}
         self.lock = threading.Lock()
-        self.initial_score = 1
+        self.initial_score = 10
         self.min_score = 0
         self.step = 0.1
 
@@ -451,7 +455,7 @@ class ImportanceScorer(Scorer):
         self.lock = threading.Lock()
         self.initial_score = 0
         self.max_score = math.inf
-        self.domain_step = 1
+        self.domain_step = 0.01
         self.page_step = 1
 
     def score(self, url):
@@ -478,19 +482,30 @@ class ImportanceScorer(Scorer):
         logger.debug(f'ImportanceScorer - updating {url} domain score to {domain_and_subdomain_score}')
 
 
+class BFSScorer(Scorer):
+    def score(self, url):
+        return 1
+
+    def update(self, _):
+        pass
+
+
 @click.command(
     name='crawl',
     short_help='crawl websites using text query',
     context_settings={'help_option_names': ['-h', '--help']})
+@click.option(
+    '--bfs', '-b', is_flag=True, default=False,
+    help='runs BFS crawler')
 @click.argument('query')
-def crawl(query):
+def crawl(query, bfs):
     print(f'Crawling "{query}"')
 
     seeder = DuckDuckGoSeeder()
     urls = seeder.get_urls(query)
     logger.debug(urls)
 
-    crawler = Crawler()
+    crawler = Crawler(bfs=bfs)
     crawler.crawl(urls)
 
 
