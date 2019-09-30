@@ -43,6 +43,8 @@ class Crawler:
     def crawl(self, urls):
         logger.info(f'{self.name} - Starting crawler')
 
+        self.print_header()
+
         for url in urls:
             self.enqueue_url(url)
 
@@ -57,7 +59,7 @@ class Crawler:
         validator.join()
 
     def enqueue_url(self, url):
-        self.candidate_url_queue.put(url)
+        self.candidate_url_queue.put((url, 1))
 
     def spawn_url_validator(self):
         validator = URLValidatorThread(self.valid_url_queue, self.candidate_url_queue, self.url_priority_queue, self.domain_locks)
@@ -68,6 +70,9 @@ class Crawler:
         for worker_id in range(self.num_workers):
             worker = WorkerThread(worker_id, self.valid_url_queue, self.candidate_url_queue, self.url_priority_queue, self.domain_locks)
             worker.start()
+
+    def print_header(self):
+        print('Timestamp\tPriority\tDepth\tSize\tURL')
 
 
 class WorkerThread(threading.Thread):
@@ -83,27 +88,27 @@ class WorkerThread(threading.Thread):
         logger.info(f'{self.name} - Spawned')
 
     def run(self):
-        for priority, url in self.enqueued_valid_urls():
-            page_size = self.crawl_url(url)
+        for priority, url, depth in self.enqueued_valid_urls():
+            page_size = self.crawl_url(url, depth)
 
             if page_size:
-                self.output_results(priority, url, page_size)
+                self.output_results(priority, url, depth, page_size)
 
     def enqueued_valid_urls(self):
         while True:
-            priority, url = self.url_priority_queue.get()
+            priority, url, depth = self.url_priority_queue.get()
 
             # Avoid simultaneous accesses to same domain
             lock = self.get_domain_lock(url)
             with lock:
                 logger.debug(f'{self.name} - Domain locks: {self.domain_locks}')
-                yield priority, url
+                yield priority, url, depth
 
     def get_domain_lock(self, url):
         domain = get_domain(url)
         return self.domain_locks[domain]
 
-    def crawl_url(self, url):
+    def crawl_url(self, url, depth):
         logger.debug(f'{self.name} - Started crawling URL {url}')
 
         if not self.is_robots_allowed(url):
@@ -116,7 +121,7 @@ class WorkerThread(threading.Thread):
         candidate_urls = self.extract_urls(page)
         candidate_urls = self.normalize_urls(url, candidate_urls)
         candidate_urls = self.deduplicate_urls(candidate_urls)
-        self.enqueue_candidate_urls(candidate_urls)
+        self.enqueue_candidate_urls(candidate_urls, depth)
 
         logger.debug(f'{self.name} - Finished crawling URL {url}')
 
@@ -177,14 +182,15 @@ class WorkerThread(threading.Thread):
     def deduplicate_urls(self, urls):
         return list(set(urls))
 
-    def enqueue_candidate_urls(self, candidate_urls):
+    def enqueue_candidate_urls(self, candidate_urls, depth):
         for url in candidate_urls:
-            self.candidate_url_queue.put(url)
+            self.candidate_url_queue.put((url, depth + 1))
 
-    def output_results(self, priority, url, page_size):
+    def output_results(self, priority, url, depth, page_size):
         output = []
         output.append(f'{datetime.now().isoformat()}')
         output.append(f'{-priority}')
+        output.append(f'{depth}')
         output.append(f'{page_size}')
         output.append(f'{url}')
         print('\t'.join(output))
@@ -210,10 +216,10 @@ class URLValidatorThread(threading.Thread):
 
     def run(self):
         while True:
-            candidate_url = self.candidate_url_queue.get()
-            self.process_candidate_url(candidate_url)
+            candidate_url, depth = self.candidate_url_queue.get()
+            self.process_candidate_url(candidate_url, depth)
 
-    def process_candidate_url(self, candidate_url):
+    def process_candidate_url(self, candidate_url, depth):
         logger.debug(f'{self.name} - Validating URL {candidate_url}')
 
         if self.is_valid_url(candidate_url):
@@ -225,7 +231,7 @@ class URLValidatorThread(threading.Thread):
             # Add to queue only *after* updating validators to avoid processing
             # URLs that are still being validated
             # self.valid_url_queue.put(candidate_url)
-            self.url_priority_queue.put(candidate_url)
+            self.url_priority_queue.put(candidate_url, depth)
 
     def is_valid_url(self, candidate_url):
         for validator in self.validators:
@@ -308,17 +314,19 @@ class URLPriorityQueue:
     def pop(self):
         with self.queue_lock:
             result_url = None
+            result_depth = None
 
             while result_url is None:
-                priority, url = self.priority_queue.pop()
+                priority, (url, depth) = self.priority_queue.pop()
                 updated_priority = self.calculate_url_priority(url)
 
                 logger.debug(f'URLPriorityQueue - recalculated priority {-priority} -> {-updated_priority} for URL {url}')
 
                 if priority == updated_priority:
                     result_url = url
+                    result_depth = depth
                 else:
-                    self.priority_queue.put(updated_priority, url)
+                    self.priority_queue.put(updated_priority, (url, depth))
 
             logger.debug(f'URLPriorityQueue - Priority: {-priority} URL: {result_url}')
 
@@ -328,25 +336,25 @@ class URLPriorityQueue:
             # Bookkeeping
             self.current_urls.remove(result_url)
 
-        return priority, result_url
+        return priority, result_url, result_depth
 
-    def put(self, url):
+    def put(self, url, depth):
         with self.queue_lock:
             if not self.is_url_enqueued(url):
-                self.enqueue(url)
+                self.enqueue(url, depth)
 
             # Update importance score whenever a link to the URL is enqueued to be visited
             self.importance_scorer.update(url)
             priority = self.calculate_url_priority(url)
-            self.priority_queue.update(priority, url)
+            self.priority_queue.update(priority, (url, depth))
 
     def is_url_enqueued(self, url):
         return url in self.current_urls
 
-    def enqueue(self, url):
+    def enqueue(self, url, depth):
         priority = self.calculate_url_priority(url)
         url_id = self.calculate_url_id()
-        self.priority_queue.put(priority, url)
+        self.priority_queue.put(priority, (url, depth))
         self.current_urls.add(url)
 
     def calculate_url_priority(self, url):
